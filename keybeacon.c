@@ -311,7 +311,6 @@ BUILD_ASSERT(KBP_BATT_PAYLOAD_LEN == (IS_ENABLED(CONFIG_ZMK_SPLIT) ? 2 : 1),
 
 static uint8_t batt_payload_cache[KBP_BATT_PAYLOAD_LEN];
 static uint8_t batt_payload_buf[KBP_BATT_PAYLOAD_LEN];
-static int64_t batt_last_emit_ms;
 static uint8_t central_battery_percent = 255; /* sentinel: no event yet */
 
 static inline uint8_t kbp_clamp_percent(uint8_t v) {
@@ -537,17 +536,12 @@ ZMK_SUBSCRIPTION(conn_listener, zmk_peripheral_battery_state_changed);
 
 #if IS_ENABLED(CONFIG_ZMK_KEYBEACON_BATTERY)
 
-static void batt_update_and_notify(bool event_driven) {
+static void batt_update_and_notify(void) {
     batt_build_payload(batt_payload_buf);
     if (memcmp(batt_payload_buf, batt_payload_cache, sizeof(batt_payload_cache)) == 0) {
         return;
     }
-    int64_t now = k_uptime_get();
-    if (!event_driven && (now - batt_last_emit_ms) < 1000) {
-        return;
-    }
     memcpy(batt_payload_cache, batt_payload_buf, sizeof(batt_payload_cache));
-    batt_last_emit_ms = now;
     bt_gatt_notify(NULL, &keybeacon_svc.attrs[KBP_ATTR_AA3], batt_payload_cache,
                    sizeof(batt_payload_cache));
 }
@@ -571,7 +565,7 @@ static int batt_cb(const zmk_event_t *eh) {
         }
     }
 #endif
-    batt_update_and_notify(true);
+    batt_update_and_notify();
     return ZMK_EV_EVENT_BUBBLE;
 }
 
@@ -580,14 +574,6 @@ ZMK_SUBSCRIPTION(batt_listener, zmk_battery_state_changed);
 #if IS_ENABLED(CONFIG_ZMK_SPLIT) && IS_ENABLED(CONFIG_ZMK_SPLIT_BLE)
 ZMK_SUBSCRIPTION(batt_listener, zmk_peripheral_battery_state_changed);
 #endif
-
-static void batt_floor_work_cb(struct k_work *work);
-K_WORK_DELAYABLE_DEFINE(batt_floor_work, batt_floor_work_cb);
-
-static void batt_floor_work_cb(struct k_work *work) {
-    batt_update_and_notify(false);
-    k_work_schedule(&batt_floor_work, K_SECONDS(1));
-}
 
 #endif /* CONFIG_ZMK_KEYBEACON_BATTERY */
 
@@ -602,7 +588,6 @@ static int keybeacon_init(void) {
 #endif
 #if IS_ENABLED(CONFIG_ZMK_KEYBEACON_BATTERY)
     batt_build_payload(batt_payload_cache);
-    k_work_schedule(&batt_floor_work, K_SECONDS(1));
 #endif
     return 0;
 }
